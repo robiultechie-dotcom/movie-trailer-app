@@ -2,24 +2,28 @@
 
 require 'digest'
 
-# Generates deterministic fake movies with multi-clip combination, color grading, speed, and zoom.
+# Generates deterministic fake movies with sequential 1..13 audio cycling and 1..20 unique dual-clip pairings.
 class MoviesController < ApplicationController
   PER_PAGE = 10
   DEFAULT_LOCALE = 'en-US'
   DEFAULT_SEED = '58933423'
+  TOTAL_VIDEOS = 20
+  TOTAL_AUDIO_TRACKS = 13
 
   COLOR_PRESETS = [
     'contrast(1.18) saturate(1.3) brightness(1.02)',                        # Crisp Cinematic
     'hue-rotate(35deg) contrast(1.15) saturate(1.2)',                       # Modern Teal/Warm
     'sepia(0.35) contrast(1.2) saturate(1.25)',                             # Golden Vintage
-    'contrast(1.3) saturate(0.8) brightness(0.95)',                         # Gritty Noir / Thriller
-    'hue-rotate(180deg) contrast(1.1) saturate(1.25)',                      # Sci-Fi Neon
-    'saturate(1.45) contrast(1.15)'                                         # Vibrant Blockbuster
+    'contrast(1.3) saturate(0.8) brightness(0.95)',                         # Gritty Noir
+    'hue-rotate(190deg) contrast(1.12) saturate(1.25)',                     # Sci-Fi Cyberpunk
+    'saturate(1.45) contrast(1.15)',                                        # Vibrant Blockbuster
+    'brightness(0.95) contrast(1.25) saturate(1.1) hue-rotate(-20deg)',     # Moody Action
+    'contrast(1.1) saturate(1.15) sepia(0.15)'                              # Warm Drama
   ].freeze
 
-  SPEED_PRESETS = [0.9, 0.95, 1.0, 1.1, 1.18].freeze
+  SPEED_PRESETS = [0.92, 0.96, 1.0, 1.08, 1.15].freeze
   ZOOM_PRESETS  = [1.12, 1.16, 1.20].freeze
-  TRANSITIONS   = %w[crossfade fade-black].freeze
+  TRANSITIONS   = %w[crossfade fade-black flash-white].freeze
 
   LOCALE_DATA = {
     'en-US' => {
@@ -185,16 +189,21 @@ class MoviesController < ApplicationController
     plot_idx   = struct_rng.rand(dict[:plots].size)
     hook_idx   = struct_rng.rand(dict[:hooks].size)
 
-    # 1. Deterministically pick 2 DISTINCT clips out of the 4 available
-    clip_a = ((index - 1) % 4) + 1
-    possible_b = [1, 2, 3, 4] - [clip_a]
-    clip_b = possible_b[struct_rng.rand(possible_b.size)]
+    # 1. Video Sequence: 1 to 20 starting clips are 100% unique across movies
+    clip_a = ((index - 1) % TOTAL_VIDEOS) + 1
+    # Second clip paired with a +10 offset so clip_b is always different and never repeats the opening clip
+    clip_b = ((index - 1 + 10) % TOTAL_VIDEOS) + 1
 
-    # 2. Pick deterministic color correction, speed, zoom, and transition
+    # 2. Audio Sequence: strictly sequential 1 to 13, then renews (no two consecutive movies share audio)
+    music_idx = ((index - 1) % TOTAL_AUDIO_TRACKS) + 1
+
+    # 3. Dynamic styling, zoom, speed, and transitions
     color_effect = COLOR_PRESETS[struct_rng.rand(COLOR_PRESETS.size)]
     speed        = SPEED_PRESETS[struct_rng.rand(SPEED_PRESETS.size)]
     zoom         = ZOOM_PRESETS[struct_rng.rand(ZOOM_PRESETS.size)]
     transition   = TRANSITIONS[struct_rng.rand(TRANSITIONS.size)]
+    offset1      = (struct_rng.rand(0..15) / 10.0).round(1)
+    offset2      = (struct_rng.rand(0..15) / 10.0).round(1)
 
     adjective = if dict[:title_adj].is_a?(Hash)
                   gender = dict[:noun_genders][noun_idx]
@@ -224,6 +233,9 @@ class MoviesController < ApplicationController
       trailer: {
         clip1: "clip#{clip_a}",
         clip2: "clip#{clip_b}",
+        audio: "music#{music_idx}",
+        offset1: offset1,
+        offset2: offset2,
         color_effect: color_effect,
         speed: speed,
         zoom: zoom,
