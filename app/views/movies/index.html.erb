@@ -1,0 +1,469 @@
+﻿<%
+  trailer = lambda do |movie, compact = false|
+    t = movie[:trailer]
+    data = { index: movie[:index], title: movie[:title], actor: movie[:cast].split(',').first,
+             hook: t[:hook], starring: t[:starring_text], hue: t[:hue], speed: t[:speed], zoom: t[:zoom],
+             swap: t[:swap], offset1: t[:offset1], offset2: t[:offset2] }
+    data.merge!(bs_toggle: 'collapse', bs_target: "#gallery-details-#{movie[:index]}") if compact
+    size = compact ? 45 : 55
+    clip = ->(n) { content_tag(:video, nil, class: "trailer-video video-clip-#{n}", src: "/videos/clip#{n}.mp4", playsinline: true, preload: 'auto', muted: true) }
+
+    content_tag :div, class: ['trailer-container', compact ? 'rounded-top' : 'shadow-sm'], style: ('cursor: pointer;' if compact), data: data do
+      safe_join([
+        clip.(1), clip.(2),
+        content_tag(:audio, nil, class: 'trailer-audio', src: '/music.mp3', preload: 'auto'),
+        content_tag(:canvas, nil, class: 'trailer-canvas'),
+        content_tag(:div, class: 'position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center trailer-placeholder bg-dark') do
+          content_tag(compact ? :h6 : :h5, movie[:title], class: "text-uppercase fw-bold text-light opacity-50 #{compact ? 'px-2' : 'px-3'} text-center mb-0", style: 'word-wrap: break-word;')
+        end,
+        content_tag(:button, content_tag(:i, nil, class: "bi bi-play-fill #{compact ? 'fs-5' : 'fs-3'}"),
+                    class: 'btn btn-primary rounded-circle position-absolute play-btn',
+                    style: "width: #{size}px; height: #{size}px; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 5;",
+                    onclick: "#{'event.stopPropagation(); ' if compact}playTwoClipTrailer(this)")
+      ])
+    end
+  end
+
+  reviews_list = lambda do |movie, compact = false|
+    items = movie[:reviews].map do |review|
+      content_tag :li, class: (compact ? 'mb-2' : 'mb-3') do
+        content_tag(:div, review[:body], class: compact ? 'text-dark' : 'review-text') +
+          content_tag(:div, "— #{review[:author]}, #{review[:company]}",
+                      class: compact ? 'text-muted fst-italic' : 'review-author', style: ('font-size: 0.85em;' if compact))
+      end
+    end
+    content_tag :ul, safe_join(items), class: compact ? 'list-unstyled small mb-0' : 'list-unstyled'
+  end
+%>
+<div class="container mt-4 pb-5">
+  <style>
+    .table-hover tbody tr.main-movie-row { transition: background-color 0.2s ease; cursor: pointer; }
+    .table > tbody > tr.expanded-blue > td { background-color: #e2eafc !important; color: #000 !important; }
+    .toggle-icon { transition: transform 0.3s ease; display: inline-block; }
+
+    .trailer-wrapper { max-width: 340px; margin: 10px auto; }
+    .trailer-container { aspect-ratio: 16 / 9; width: 100%; position: relative; overflow: hidden; border-radius: 8px; background-color: #000; }
+    .trailer-video { object-fit: cover; width: 100%; height: 100%; display: none; position: absolute; top: 0; left: 0; z-index: 2; transition: transform 5s ease-out; }
+    .trailer-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; pointer-events: none; z-index: 4; }
+    .trailer-placeholder { z-index: 3; }
+    .trailer-placeholder.is-hidden { display: none !important; }
+
+    .review-text { font-size: 0.9rem; line-height: 1.4; color: #2b2f32; }
+    .review-author { font-size: 0.85rem; color: #6c757d; font-style: italic; }
+  </style>
+
+  <!-- Toolbar -->
+  <div class="row gx-3 align-items-end mb-4 p-3 bg-light border rounded shadow-sm sticky-top" style="z-index: 1000; top: 10px;">
+    <div class="col-auto">
+      <label for="languageSelect" class="form-label small text-muted mb-1"><%= @ui[:language] %></label>
+      <select id="languageSelect" class="form-select form-select-sm" style="min-width: 155px;">
+        <% { 'en-US' => 'English (US)', 'de-DE' => 'German (Germany)', 'fr-FR' => 'French (France)' }.each do |code, label| %>
+          <option value="<%= code %>" <%= 'selected' if @locale == code %>><%= label %></option>
+        <% end %>
+      </select>
+    </div>
+    <div class="col-auto">
+      <label for="seedInput" class="form-label small text-muted mb-1"><%= @ui[:seed] %></label>
+      <div class="input-group input-group-sm" style="max-width: 180px;">
+        <input type="text" id="seedInput" class="form-control" value="<%= @seed %>">
+        <button class="btn btn-outline-secondary" type="button" id="randomSeedBtn" title="Randomize Seed"><i class="bi bi-shuffle"></i></button>
+      </div>
+    </div>
+    <div class="col-auto px-4" style="min-width: 200px;">
+      <label for="likesSlider" class="form-label small text-muted mb-1 d-flex justify-content-between">
+        <span><%= @ui[:likes] %></span><span id="likesBadge" class="badge bg-primary rounded-pill"><%= @likes % 1 == 0 ? @likes.to_i : @likes.round(1) %></span>
+      </label>
+      <input type="range" class="form-range" id="likesSlider" min="0" max="10" step="0.1" value="<%= @likes %>">
+    </div>
+    <div class="col-auto">
+      <label for="reviewInput" class="form-label small text-muted mb-1"><%= @ui[:review] %></label>
+      <input type="number" id="reviewInput" class="form-control form-control-sm" min="0" max="10" step="0.1" value="<%= @reviews %>" style="max-width: 80px;">
+    </div>
+    <div class="col"></div>
+    <div class="col-auto">
+      <div class="btn-group btn-group-sm" role="group">
+        <% { 'table' => ['tableViewBtn', 'bi-table'], 'gallery' => ['galleryViewBtn', 'bi-card-image'] }.each do |mode, (id, icon)| %>
+          <button type="button" id="<%= id %>" class="btn <%= @view_mode == mode ? 'btn-primary' : 'btn-outline-primary' %>"><i class="bi <%= icon %>"></i></button>
+        <% end %>
+      </div>
+    </div>
+  </div>
+
+  <!-- Movie data container -->
+  <div id="movieDataContainer">
+    <% if @view_mode == 'table' %>
+      <div class="table-responsive pt-2" id="moviesListBody">
+        <table class="table table-hover align-middle mb-0" id="movieAccordion">
+          <thead>
+            <tr class="fw-bold border-bottom border-dark text-center">
+              <th scope="col" class="text-start border-0" style="width: 80px;">#</th>
+              <th scope="col" class="text-start border-0"><%= @ui[:genre] %></th>
+              <th scope="col" class="text-start border-0"><%= @ui[:title] %></th>
+              <th scope="col" class="text-start border-0"><%= @ui[:cast] %></th>
+              <th scope="col" class="text-end border-0"><%= @ui[:year] %></th>
+            </tr>
+          </thead>
+          <tbody>
+            <% @movies.each do |movie| %>
+              <tr class="main-movie-row border-bottom" data-bs-toggle="collapse" data-bs-target="#details-<%= movie[:index] %>">
+                <td class="text-muted"><i class="bi bi-chevron-down me-2 small toggle-icon"></i> <%= movie[:index] %></td>
+                <td><%= movie[:genre] %></td>
+                <td class="fw-medium"><%= movie[:title] %></td>
+                <td class="text-truncate" style="max-width: 300px;"><%= movie[:cast] %></td>
+                <td class="text-end"><%= movie[:year] %></td>
+              </tr>
+              <tr class="border-0 p-0">
+                <td colspan="5" class="p-0 border-0">
+                  <div class="collapse details-collapse" id="details-<%= movie[:index] %>" data-bs-parent="#movieAccordion">
+                    <div class="row p-4 border-bottom shadow-sm" style="background-color: #f8f9fa;">
+                      <div class="col-md-4 text-center">
+                        <div class="trailer-wrapper">
+                          <%= trailer.(movie) %>
+                          <div class="mt-3">
+                            <span class="badge rounded-pill bg-primary px-3 py-2 shadow-sm fs-6"><%= movie[:likes] %> <i class="bi bi-hand-thumbs-up-fill"></i></span>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="col-md-8 ps-md-2 text-start">
+                        <h3 class="fw-normal mb-2 text-dark">
+                          <strong><%= movie[:title] %></strong>
+                          <span class="text-secondary fs-5 ms-2"><%= movie[:year] %>, <%= movie[:genre] %></span>
+                        </h3>
+                        <div class="mb-3 d-flex align-items-center">
+                          <span class="badge bg-secondary rounded-pill me-2 px-3">Top 10</span>
+                          <span class="text-muted small me-3">144 <%= @ui[:min] %></span>
+                          <span class="fw-bold text-dark fs-6">13+</span>
+                        </div>
+                        <p class="mb-1 text-dark" style="font-size: 0.95rem;"><strong><%= @ui[:cast] %>:</strong> <span class="text-secondary"><%= movie[:cast] %></span></p>
+                        <p class="mb-3 text-dark" style="font-size: 0.95rem;"><strong><%= @ui[:director] %>:</strong> <span class="text-secondary"><%= movie[:director] %></span></p>
+                        <p class="text-muted mb-4" style="font-size: 0.95rem;"><%= movie[:plot] %></p>
+                        <h6 class="text-muted fw-bold mb-2 border-bottom pb-1"><%= @ui[:review] %> (<%= movie[:reviews].count %>)</h6>
+                        <%= reviews_list.(movie) %>
+                      </div>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="d-flex justify-content-center mt-5 mb-4" id="paginationBlock">
+        <ul class="pagination pagination-sm shadow-sm">
+          <li class="page-item <%= 'disabled' if @page <= 1 %>"><a class="page-link" href="#" data-page="<%= @page - 1 %>">&laquo;</a></li>
+          <li class="page-item active"><a class="page-link" href="#" data-page="<%= @page %>"><%= @page %></a></li>
+          <li class="page-item"><a class="page-link" href="#" data-page="<%= @page + 1 %>"><%= @page + 1 %></a></li>
+          <li class="page-item"><a class="page-link" href="#" data-page="<%= @page + 1 %>">&raquo;</a></li>
+        </ul>
+      </div>
+    <% else %>
+      <div class="row row-cols-1 row-cols-md-2 row-cols-xl-5 g-4 mt-1" id="moviesListBody">
+        <% @movies.each do |movie| %>
+          <div class="col">
+            <div class="card h-100 shadow-sm border-0 bg-light">
+              <%= trailer.(movie, true) %>
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <span class="badge bg-secondary">#<%= movie[:index] %></span>
+                  <span class="badge bg-primary rounded-pill"><%= movie[:likes] %> <i class="bi bi-hand-thumbs-up-fill"></i></span>
+                </div>
+                <h6 class="card-title fw-bold mb-1 text-truncate"><%= movie[:title] %></h6>
+                <p class="card-subtitle text-muted small mb-2"><%= movie[:year] %> &bull; <%= movie[:genre] %></p>
+                <p class="card-text small text-truncate text-muted"><strong><%= @ui[:cast] %>:</strong> <%= movie[:cast] %></p>
+              </div>
+              <div class="collapse border-top border-primary border-opacity-25" id="gallery-details-<%= movie[:index] %>">
+                <div class="card-body bg-white pt-2">
+                  <p class="small text-muted mb-2"><%= movie[:plot] %></p>
+                  <h6 class="small fw-bold border-bottom pb-1"><%= @ui[:reviews] %> (<%= movie[:reviews].count %>)</h6>
+                  <%= reviews_list.(movie, true) %>
+                </div>
+              </div>
+            </div>
+          </div>
+        <% end %>
+      </div>
+
+      <div id="scrollSentinel" class="d-flex justify-content-center py-4">
+        <div class="spinner-border text-primary" role="status" id="loadingSpinner" style="display: none;"><span class="visually-hidden">Loading...</span></div>
+      </div>
+    <% end %>
+  </div>
+</div>
+
+<script>
+  window.currentActiveTrailer = null;
+
+  (() => {
+    const FONT = '"Segoe UI", Roboto, Arial, sans-serif';
+    const TITLE_FONT = '"Segoe UI", Impact, Arial, sans-serif';
+    const fade = (t, total, ms) => (t < ms ? t / ms : t > total - ms ? (total - t) / ms : 1);
+
+    const wrapText = (ctx, text, x, y, maxWidth, lineHeight) => {
+      if (!text) return;
+      const lines = [];
+      let line = '';
+      text.split(' ').forEach((word, i) => {
+        const candidate = `${line}${word} `;
+        if (ctx.measureText(candidate).width > maxWidth && i > 0) { lines.push(line.trim()); line = `${word} `; }
+        else line = candidate;
+      });
+      lines.push(line.trim());
+      const startY = y - ((lines.length - 1) * lineHeight) / 2;
+      lines.forEach((content, i) => ctx.fillText(content, x, startY + i * lineHeight));
+    };
+
+    const drawOverlay = (ctx, canvas, cfg, p) => {
+      const { width: w, height: h } = canvas;
+      const zoomed = (text, scale, alpha, font, maxWidth, lineHeight) => {
+        ctx.save();
+        ctx.translate(w / 2, h / 2);
+        ctx.scale(scale, scale);
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+        ctx.font = font;
+        wrapText(ctx, text, 0, 0, maxWidth, lineHeight);
+        ctx.restore();
+      };
+
+      if (p < 3200) {
+        zoomed(cfg.hook, 1 + p / 15000, fade(p, 3200, 400), `bold 18px ${FONT}`, w - 40, 24);
+      } else if (p >= 3500 && p < 6500) {
+        const t = p - 3500, alpha = fade(t, 3000, 400), x = w / 2 + (t < 800 ? 40 - (t / 800) * 40 : 0);
+        ctx.fillStyle = `rgba(220, 230, 255, ${alpha})`;
+        ctx.font = `13px ${FONT}`;
+        ctx.fillText(cfg.starringLabel, x, h / 2 - 16);
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+        ctx.font = `bold 18px ${FONT}`;
+        wrapText(ctx, cfg.actor, x, h / 2 + 14, w - 40, 22);
+      } else if (p >= 6800) {
+        const t = p - 6800;
+        zoomed(cfg.title, 1 + t / 25000, fade(t, 3200, 500), `bold 21px ${TITLE_FONT}`, w - 30, 26);
+      }
+    };
+
+    const resetClip = (clip) => { clip.pause(); clip.style.display = 'none'; clip.style.transform = 'scale(1)'; };
+    const startClip = (clip, offset, zoom) => {
+      clip.currentTime = offset;
+      clip.style.display = 'block';
+      requestAnimationFrame(() => { clip.style.transform = `scale(${zoom})`; });
+      clip.play().catch((e) => console.warn(e));
+    };
+
+    window.playTwoClipTrailer = (button) => {
+      window.currentActiveTrailer?.stop();
+
+      const container = button.closest('.trailer-container');
+      const d = container.dataset;
+      const cfg = {
+        title: (d.title || '').toUpperCase(), hook: (d.hook || '').toUpperCase(), actor: (d.actor || '').toUpperCase(),
+        starringLabel: (d.starring || 'STARRING').toUpperCase(),
+        hue: parseInt(d.hue, 10) || 0, speed: parseFloat(d.speed) || 1.0, zoom: parseFloat(d.zoom) || 1.1
+      };
+      const offsets = [parseFloat(d.offset1) || 0, parseFloat(d.offset2) || 0];
+      const clips = [container.querySelector('.video-clip-1'), container.querySelector('.video-clip-2')];
+      if (d.swap === 'true') { clips.reverse(); offsets.reverse(); }
+      const [first, second] = clips;
+
+      const audio = container.querySelector('.trailer-audio');
+      const canvas = container.querySelector('.trailer-canvas');
+      const placeholder = container.querySelector('.trailer-placeholder');
+      const ctx = canvas.getContext('2d');
+      canvas.width = container.clientWidth;
+      canvas.height = container.clientHeight;
+
+      clips.forEach((clip) => {
+        clip.style.filter = `hue-rotate(${cfg.hue}deg) contrast(1.15) saturate(1.25)`;
+        clip.playbackRate = cfg.speed;
+        clip.loop = true;
+        clip.style.transform = 'scale(1)';
+      });
+      button.style.display = 'none';
+      placeholder.classList.add('is-hidden');
+      canvas.style.display = 'block';
+
+      resetClip(second);
+      startClip(first, offsets[0], cfg.zoom);
+      if (audio) {
+        audio.currentTime = 0;
+        audio.volume = 1.0;
+        audio.play().catch((e) => console.warn('Audio autoplay blocked:', e));
+      }
+
+      let startTime = null, switched = false, frameId = null;
+
+      const stop = () => {
+        cancelAnimationFrame(frameId);
+        clips.forEach(resetClip);
+        audio?.pause();
+        canvas.style.display = 'none';
+        placeholder.classList.remove('is-hidden');
+        button.style.display = 'block';
+        window.currentActiveTrailer = null;
+      };
+      window.currentActiveTrailer = { stop };
+
+      const render = (timestamp) => {
+        startTime ??= timestamp;
+        const p = timestamp - startTime;
+
+        if (p >= 5000 && !switched) {
+          resetClip(first);
+          startClip(second, offsets[1], cfg.zoom);
+          switched = true;
+        }
+        if (p >= 10000) return stop();
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const vignette = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, canvas.height / 3, canvas.width / 2, canvas.height / 2, canvas.width / 1.15);
+        vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+        vignette.addColorStop(1, 'rgba(0, 0, 0, 0.72)');
+        ctx.fillStyle = vignette;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+        ctx.shadowBlur = 8;
+        ctx.shadowOffsetX = 2;
+        ctx.shadowOffsetY = 2;
+        drawOverlay(ctx, canvas, cfg, p);
+
+        frameId = requestAnimationFrame(render);
+      };
+      frameId = requestAnimationFrame(render);
+    };
+  })();
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const $ = (id) => document.getElementById(id);
+    const stopTrailer = () => window.currentActiveTrailer?.stop();
+    const [language, seed, likes, reviews] = ['languageSelect', 'seedInput', 'likesSlider', 'reviewInput'].map($);
+    const state = { view: "<%= @view_mode %>", page: <%= @page %>, fetching: false };
+    let observer = null, timer = null;
+
+    const formatBadge = (val) => {
+      const num = parseFloat(val);
+      return num % 1 === 0 ? num.toFixed(0) : num.toFixed(1);
+    };
+
+    const setSpinner = (visible) => { const spinner = $('loadingSpinner'); if (spinner) spinner.style.display = visible ? 'block' : 'none'; };
+
+    const load = (append = false) => {
+      if (state.fetching) return;
+      state.fetching = true;
+      $('likesBadge').textContent = formatBadge(likes.value);
+      if (append) setSpinner(true);
+
+      // Preserve currently open accordion rows before HTML is replaced
+      const openCollapseIds = Array.from(document.querySelectorAll('.details-collapse.show, [id^="gallery-details-"].show')).map(el => el.id);
+
+      const query = new URLSearchParams({ locale: language.value, seed: seed.value, likes: likes.value, reviews: reviews.value, page: state.page, view_mode: state.view });
+      fetch(`/?${query}`)
+        .then((response) => response.text())
+        .then((html) => {
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          if (append) {
+            $('moviesListBody').insertAdjacentHTML('beforeend', doc.getElementById('moviesListBody').innerHTML);
+            setSpinner(false);
+          } else {
+            $('movieDataContainer').innerHTML = doc.getElementById('movieDataContainer').innerHTML;
+
+            // Restore all previously opened accordion rows and their UI styles
+            openCollapseIds.forEach((id) => {
+              const el = document.getElementById(id);
+              if (el) {
+                el.classList.add('show');
+                const row = el.closest('tr')?.previousElementSibling;
+                if (row) {
+                  row.classList.add('expanded-blue');
+                  const icon = row.querySelector('.toggle-icon');
+                  if (icon) icon.style.transform = 'rotate(180deg)';
+                }
+              }
+            });
+
+            if (state.view === 'gallery') window.scrollTo({ top: 0, behavior: 'smooth' });
+          }
+          state.fetching = false;
+          observeSentinel();
+        })
+        .catch((error) => { console.error('Failed to load movies:', error); state.fetching = false; setSpinner(false); });
+    };
+
+    const observeSentinel = () => {
+      observer?.disconnect();
+      const sentinel = $('scrollSentinel');
+      if (!sentinel || state.view !== 'gallery') return;
+      observer = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting && !state.fetching) { state.page++; load(true); }
+      }, { rootMargin: '100px' });
+      observer.observe(sentinel);
+    };
+
+    const reload = (resetPage = false) => {
+      stopTrailer();
+      if (resetPage || state.view === 'gallery') {
+        state.page = 1;
+      }
+      load();
+    };
+
+    const debouncedReload = (resetPage = false) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => reload(resetPage), 150);
+    };
+
+    const switchView = (mode) => {
+      if (state.view === mode) return;
+      stopTrailer();
+      state.view = mode;
+      state.page = 1;
+      [['table', $('tableViewBtn')], ['gallery', $('galleryViewBtn')]].forEach(([name, button]) => {
+        button.classList.toggle('btn-primary', name === mode);
+        button.classList.toggle('btn-outline-primary', name !== mode);
+      });
+      load();
+    };
+
+    $('tableViewBtn').addEventListener('click', () => switchView('table'));
+    $('galleryViewBtn').addEventListener('click', () => switchView('gallery'));
+
+    language.addEventListener('change', () => debouncedReload(false));
+
+    seed.addEventListener('input', () => debouncedReload(true));
+    $('randomSeedBtn').addEventListener('click', () => {
+      seed.value = Math.floor(Math.random() * 1000000000);
+      debouncedReload(true);
+    });
+
+    likes.addEventListener('input', () => {
+      $('likesBadge').textContent = formatBadge(likes.value);
+      debouncedReload(false);
+    });
+    reviews.addEventListener('input', () => debouncedReload(false));
+
+    document.addEventListener('click', (event) => {
+      const link = event.target.closest('.page-link');
+      if (!link) return;
+      event.preventDefault();
+      const page = parseInt(link.dataset.page, 10);
+      if (page > 0 && !state.fetching) { stopTrailer(); state.page = page; load(); window.scrollTo(0, 0); }
+    });
+
+    observeSentinel();
+  });
+
+  const setRowExpanded = (details, expanded) => {
+    if (!details.classList.contains('details-collapse')) return;
+    const row = details.closest('tr').previousElementSibling;
+    if (!row) return;
+    row.classList.toggle('expanded-blue', expanded);
+    const icon = row.querySelector('.toggle-icon');
+    if (icon) icon.style.transform = expanded ? 'rotate(180deg)' : 'rotate(0deg)';
+  };
+  document.addEventListener('show.bs.collapse', (e) => setRowExpanded(e.target, true));
+  document.addEventListener('hide.bs.collapse', (e) => {
+    if (e.target.classList.contains('details-collapse')) window.currentActiveTrailer?.stop();
+    setRowExpanded(e.target, false);
+  });
+</script>
