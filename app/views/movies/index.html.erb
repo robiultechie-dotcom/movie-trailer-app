@@ -4,7 +4,8 @@
     data = {
       index: movie[:index], title: movie[:title], actor: movie[:cast].split(',').first,
       hook: t[:hook], starring: t[:starring_text],
-      clip1: t[:clip1], clip2: t[:clip2],
+      clip1: t[:clip1], clip2: t[:clip2], audio: t[:audio],
+      offset1: t[:offset1], offset2: t[:offset2],
       color: t[:color_effect], speed: t[:speed], zoom: t[:zoom],
       transition: t[:transition]
     }
@@ -16,7 +17,7 @@
         content_tag(:video, nil, class: 'trailer-video trailer-video-1', src: "/videos/#{t[:clip1]}.mp4", playsinline: true, preload: 'metadata', muted: true),
         content_tag(:video, nil, class: 'trailer-video trailer-video-2', src: "/videos/#{t[:clip2]}.mp4", playsinline: true, preload: 'metadata', muted: true),
         content_tag(:div, nil, class: 'trailer-transition-overlay'),
-        content_tag(:audio, nil, class: 'trailer-audio', src: '/music.mp3', preload: 'auto'),
+        content_tag(:audio, nil, class: 'trailer-audio', src: "/#{t[:audio]}.mp3", preload: 'auto'),
         content_tag(:div, nil, class: 'trailer-vignette'),
         content_tag(:canvas, nil, class: 'trailer-canvas'),
         content_tag(:div, class: 'position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center trailer-placeholder bg-dark') do
@@ -236,7 +237,9 @@
         color: d.color || 'none',
         speed: parseFloat(d.speed) || 1.0,
         zoom: parseFloat(d.zoom) || 1.15,
-        transition: d.transition || 'crossfade'
+        transition: d.transition || 'crossfade',
+        offset1: parseFloat(d.offset1) || 0,
+        offset2: parseFloat(d.offset2) || 0
       };
 
       const cachedHookLines = preWrap(cfg.hook, 3);
@@ -254,7 +257,6 @@
       canvas.width = container.clientWidth;
       canvas.height = container.clientHeight;
 
-      // Apply GPU-accelerated color correction and playback speed
       [v1, v2].forEach(v => {
         v.style.filter = cfg.color;
         v.playbackRate = cfg.speed;
@@ -273,8 +275,7 @@
         if (vignette) vignette.style.display = 'block';
         canvas.style.display = 'block';
 
-        // Prepare Clip 1
-        v1.currentTime = 0;
+        v1.currentTime = cfg.offset1;
         v1.style.display = 'block';
         v1.style.opacity = '1';
         v1.style.transform = 'scale(1)';
@@ -283,8 +284,7 @@
         });
         v1.play().catch(e => console.warn(e));
 
-        // Prepare Clip 2 in background
-        v2.currentTime = 0;
+        v2.currentTime = cfg.offset2;
         v2.style.display = 'block';
         v2.style.opacity = '0';
         v2.style.transform = 'scale(1)';
@@ -305,7 +305,10 @@
             v.style.transform = 'scale(1)';
             v.style.opacity = '0';
           });
-          if (transOverlay) transOverlay.style.opacity = '0';
+          if (transOverlay) {
+            transOverlay.style.opacity = '0';
+            transOverlay.style.backgroundColor = '#000';
+          }
           audio?.pause();
           canvas.style.display = 'none';
           if (vignette) vignette.style.display = 'none';
@@ -319,28 +322,41 @@
           startTime ??= timestamp;
           const p = timestamp - startTime;
 
-          // Transition between Clip 1 and Clip 2 around 5.0 seconds
+          // Transition between Clip 1 and Clip 2 at 4.8s
           if (p >= 4800 && !transitioned) {
             transitioned = true;
-            if (cfg.transition === 'fade-black') {
+            if (cfg.transition === 'flash-white') {
+              transOverlay.style.backgroundColor = '#fff';
               transOverlay.style.opacity = '1';
               setTimeout(() => {
                 v1.pause();
                 v1.style.opacity = '0';
-                v2.currentTime = 0;
+                v2.currentTime = cfg.offset2;
                 v2.style.opacity = '1';
                 v2.style.transform = `scale(${cfg.zoom})`;
                 v2.play().catch(e => console.warn(e));
                 transOverlay.style.opacity = '0';
-              }, 400);
+              }, 250);
+            } else if (cfg.transition === 'fade-black') {
+              transOverlay.style.backgroundColor = '#000';
+              transOverlay.style.opacity = '1';
+              setTimeout(() => {
+                v1.pause();
+                v1.style.opacity = '0';
+                v2.currentTime = cfg.offset2;
+                v2.style.opacity = '1';
+                v2.style.transform = `scale(${cfg.zoom})`;
+                v2.play().catch(e => console.warn(e));
+                transOverlay.style.opacity = '0';
+              }, 350);
             } else {
               // Smooth Crossfade
-              v2.currentTime = 0;
+              v2.currentTime = cfg.offset2;
               v2.style.opacity = '1';
               v2.style.transform = `scale(${cfg.zoom})`;
               v2.play().catch(e => console.warn(e));
               v1.style.opacity = '0';
-              setTimeout(() => v1.pause(), 600);
+              setTimeout(() => v1.pause(), 500);
             }
           }
 
@@ -351,7 +367,7 @@
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
 
-          // 0 to 3.2s: Hook Text
+          // 0 - 3.2s: Hook Text
           if (p < 3200) {
             const alpha = fade(p, 3200, 400);
             ctx.save();
@@ -362,7 +378,7 @@
             drawLines(ctx, cachedHookLines, 0, 0, 24);
             ctx.restore();
           }
-          // 3.5s to 6.5s: Starring Text + Actor (spans across the transition smoothly)
+          // 3.5 - 6.5s: Starring Text + Actor
           else if (p >= 3500 && p < 6500) {
             const t = p - 3500;
             const alpha = fade(t, 3000, 400);
@@ -375,7 +391,7 @@
             ctx.font = `bold 18px ${FONT}`;
             drawLines(ctx, cachedActorLines, x, h / 2 + 14, 22);
           }
-          // 6.8s to 10s: Movie Title
+          // 6.8 - 10s: Movie Title
           else if (p >= 6800) {
             const t = p - 6800;
             const alpha = fade(t, 3200, 500);
@@ -528,7 +544,7 @@
     const icon = row.querySelector('.toggle-icon');
     if (icon) icon.style.transform = expanded ? 'rotate(180deg)' : 'rotate(0deg)';
 
-    // Pre-buffer both trailer clips silently when row expands
+    // Pre-buffer video and audio immediately when row is opened
     if (expanded) {
       details.querySelectorAll('.trailer-video').forEach(video => {
         if (video.readyState < 2) {
@@ -536,6 +552,11 @@
           video.load();
         }
       });
+      const audio = details.querySelector('.trailer-audio');
+      if (audio && audio.readyState < 2) {
+        audio.preload = 'auto';
+        audio.load();
+      }
     }
   };
   document.addEventListener('show.bs.collapse', (e) => setRowExpanded(e.target, true));
