@@ -1,14 +1,21 @@
 ﻿<%
   trailer = lambda do |movie, compact = false|
     t = movie[:trailer]
-    data = { index: movie[:index], title: movie[:title], actor: movie[:cast].split(',').first,
-             hook: t[:hook], starring: t[:starring_text], clip: t[:clip], zoom: t[:zoom] }
+    data = {
+      index: movie[:index], title: movie[:title], actor: movie[:cast].split(',').first,
+      hook: t[:hook], starring: t[:starring_text],
+      clip1: t[:clip1], clip2: t[:clip2],
+      color: t[:color_effect], speed: t[:speed], zoom: t[:zoom],
+      transition: t[:transition]
+    }
     data.merge!(bs_toggle: 'collapse', bs_target: "#gallery-details-#{movie[:index]}") if compact
     size = compact ? 45 : 55
 
     content_tag :div, class: ['trailer-container', compact ? 'rounded-top' : 'shadow-sm'], style: ('cursor: pointer;' if compact), data: data do
       safe_join([
-        content_tag(:video, nil, class: 'trailer-video', src: "/videos/#{t[:clip]}.mp4", playsinline: true, preload: 'metadata', muted: true),
+        content_tag(:video, nil, class: 'trailer-video trailer-video-1', src: "/videos/#{t[:clip1]}.mp4", playsinline: true, preload: 'metadata', muted: true),
+        content_tag(:video, nil, class: 'trailer-video trailer-video-2', src: "/videos/#{t[:clip2]}.mp4", playsinline: true, preload: 'metadata', muted: true),
+        content_tag(:div, nil, class: 'trailer-transition-overlay'),
         content_tag(:audio, nil, class: 'trailer-audio', src: '/music.mp3', preload: 'auto'),
         content_tag(:div, nil, class: 'trailer-vignette'),
         content_tag(:canvas, nil, class: 'trailer-canvas'),
@@ -17,7 +24,7 @@
         end,
         content_tag(:button, content_tag(:i, nil, class: "bi bi-play-fill #{compact ? 'fs-5' : 'fs-3'}"),
                     class: 'btn btn-primary rounded-circle position-absolute play-btn',
-                    style: "width: #{size}px; height: #{size}px; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 5;",
+                    style: "width: #{size}px; height: #{size}px; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 6;",
                     onclick: "#{'event.stopPropagation(); ' if compact}playTrailer(this)")
       ])
     end
@@ -42,10 +49,12 @@
 
     .trailer-wrapper { max-width: 340px; margin: 10px auto; }
     .trailer-container { aspect-ratio: 16 / 9; width: 100%; position: relative; overflow: hidden; border-radius: 8px; background-color: #000; }
-    .trailer-video { object-fit: cover; width: 100%; height: 100%; display: none; position: absolute; top: 0; left: 0; z-index: 2; transform: scale(1); }
-    .trailer-vignette { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle, rgba(0,0,0,0) 40%, rgba(0,0,0,0.65) 100%); z-index: 3; pointer-events: none; display: none; }
-    .trailer-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; pointer-events: none; z-index: 4; }
-    .trailer-placeholder { z-index: 3; }
+    .trailer-video { object-fit: cover; width: 100%; height: 100%; display: none; position: absolute; top: 0; left: 0; z-index: 2; transform: scale(1); opacity: 1; transition: opacity 0.6s ease-in-out, transform 5s ease-out; }
+    .trailer-video-2 { z-index: 3; opacity: 0; }
+    .trailer-transition-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 4; opacity: 0; pointer-events: none; transition: opacity 0.4s ease-in-out; }
+    .trailer-vignette { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle, rgba(0,0,0,0) 40%, rgba(0,0,0,0.65) 100%); z-index: 4; pointer-events: none; display: none; }
+    .trailer-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; pointer-events: none; z-index: 5; }
+    .trailer-placeholder { z-index: 4; }
     .trailer-placeholder.is-hidden { display: none !important; }
 
     .review-text { font-size: 0.9rem; line-height: 1.4; color: #2b2f32; }
@@ -224,14 +233,19 @@
         hook: (d.hook || '').toUpperCase(),
         actor: (d.actor || '').toUpperCase(),
         starringLabel: (d.starring || 'STARRING').toUpperCase(),
-        zoom: parseFloat(d.zoom) || 1.1
+        color: d.color || 'none',
+        speed: parseFloat(d.speed) || 1.0,
+        zoom: parseFloat(d.zoom) || 1.15,
+        transition: d.transition || 'crossfade'
       };
 
       const cachedHookLines = preWrap(cfg.hook, 3);
       const cachedTitleLines = preWrap(cfg.title, 2);
       const cachedActorLines = preWrap(cfg.actor, 2);
 
-      const video = container.querySelector('.trailer-video');
+      const v1 = container.querySelector('.trailer-video-1');
+      const v2 = container.querySelector('.trailer-video-2');
+      const transOverlay = container.querySelector('.trailer-transition-overlay');
       const audio = container.querySelector('.trailer-audio');
       const vignette = container.querySelector('.trailer-vignette');
       const canvas = container.querySelector('.trailer-canvas');
@@ -240,7 +254,12 @@
       canvas.width = container.clientWidth;
       canvas.height = container.clientHeight;
 
-      // Show small spinner on button while network buffers
+      // Apply GPU-accelerated color correction and playback speed
+      [v1, v2].forEach(v => {
+        v.style.filter = cfg.color;
+        v.playbackRate = cfg.speed;
+      });
+
       const origBtnContent = button.innerHTML;
       button.innerHTML = '<span class="spinner-border spinner-border-sm text-light"></span>';
       button.disabled = true;
@@ -253,27 +272,40 @@
         placeholder.classList.add('is-hidden');
         if (vignette) vignette.style.display = 'block';
         canvas.style.display = 'block';
-        video.style.display = 'block';
 
-        video.currentTime = 0;
-        video.style.transition = 'transform 10s ease-out';
-        video.style.transform = `scale(${cfg.zoom})`;
+        // Prepare Clip 1
+        v1.currentTime = 0;
+        v1.style.display = 'block';
+        v1.style.opacity = '1';
+        v1.style.transform = 'scale(1)';
+        requestAnimationFrame(() => {
+          v1.style.transform = `scale(${cfg.zoom})`;
+        });
+        v1.play().catch(e => console.warn(e));
+
+        // Prepare Clip 2 in background
+        v2.currentTime = 0;
+        v2.style.display = 'block';
+        v2.style.opacity = '0';
+        v2.style.transform = 'scale(1)';
 
         if (audio) {
           audio.currentTime = 0;
           audio.volume = 1.0;
-          audio.play().catch((e) => console.warn('Audio play error:', e));
+          audio.play().catch(e => console.warn(e));
         }
 
-        let startTime = null, frameId = null;
+        let startTime = null, transitioned = false, frameId = null;
 
         const stop = () => {
           cancelAnimationFrame(frameId);
-          video.pause();
-          video.style.display = 'none';
-          video.style.transition = 'none';
-          video.style.transform = 'scale(1)';
-
+          [v1, v2].forEach(v => {
+            v.pause();
+            v.style.display = 'none';
+            v.style.transform = 'scale(1)';
+            v.style.opacity = '0';
+          });
+          if (transOverlay) transOverlay.style.opacity = '0';
           audio?.pause();
           canvas.style.display = 'none';
           if (vignette) vignette.style.display = 'none';
@@ -287,7 +319,31 @@
           startTime ??= timestamp;
           const p = timestamp - startTime;
 
-          // Exactly 10s playback duration
+          // Transition between Clip 1 and Clip 2 around 5.0 seconds
+          if (p >= 4800 && !transitioned) {
+            transitioned = true;
+            if (cfg.transition === 'fade-black') {
+              transOverlay.style.opacity = '1';
+              setTimeout(() => {
+                v1.pause();
+                v1.style.opacity = '0';
+                v2.currentTime = 0;
+                v2.style.opacity = '1';
+                v2.style.transform = `scale(${cfg.zoom})`;
+                v2.play().catch(e => console.warn(e));
+                transOverlay.style.opacity = '0';
+              }, 400);
+            } else {
+              // Smooth Crossfade
+              v2.currentTime = 0;
+              v2.style.opacity = '1';
+              v2.style.transform = `scale(${cfg.zoom})`;
+              v2.play().catch(e => console.warn(e));
+              v1.style.opacity = '0';
+              setTimeout(() => v1.pause(), 600);
+            }
+          }
+
           if (p >= 10000) return stop();
 
           const { width: w, height: h } = canvas;
@@ -295,17 +351,19 @@
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
 
+          // 0 to 3.2s: Hook Text
           if (p < 3200) {
             const alpha = fade(p, 3200, 400);
             ctx.save();
             ctx.translate(w / 2, h / 2);
-            const sc = 1 + p / 18000;
-            ctx.scale(sc, sc);
+            ctx.scale(1 + p / 18000, 1 + p / 18000);
             ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
             ctx.font = `bold 19px ${FONT}`;
             drawLines(ctx, cachedHookLines, 0, 0, 24);
             ctx.restore();
-          } else if (p >= 3500 && p < 6500) {
+          }
+          // 3.5s to 6.5s: Starring Text + Actor (spans across the transition smoothly)
+          else if (p >= 3500 && p < 6500) {
             const t = p - 3500;
             const alpha = fade(t, 3000, 400);
             const x = w / 2 + (t < 800 ? 30 - (t / 800) * 30 : 0);
@@ -316,13 +374,14 @@
             ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
             ctx.font = `bold 18px ${FONT}`;
             drawLines(ctx, cachedActorLines, x, h / 2 + 14, 22);
-          } else if (p >= 6800) {
+          }
+          // 6.8s to 10s: Movie Title
+          else if (p >= 6800) {
             const t = p - 6800;
             const alpha = fade(t, 3200, 500);
             ctx.save();
             ctx.translate(w / 2, h / 2);
-            const sc = 1 + t / 26000;
-            ctx.scale(sc, sc);
+            ctx.scale(1 + t / 26000, 1 + t / 26000);
             ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
             ctx.font = `bold 22px ${TITLE_FONT}`;
             drawLines(ctx, cachedTitleLines, 0, 0, 26);
@@ -332,21 +391,14 @@
           frameId = requestAnimationFrame(render);
         };
 
-        // Guarantee smooth sync between audio and video
-        video.play().then(() => {
-          frameId = requestAnimationFrame(render);
-        }).catch((err) => {
-          console.warn('Playback error:', err);
-          stop();
-        });
+        frameId = requestAnimationFrame(render);
       };
 
-      // If buffer is already loaded, start immediately. Otherwise wait for frame readiness.
-      if (video.readyState >= 3) {
+      if (v1.readyState >= 3) {
         launchTrailer();
       } else {
-        video.addEventListener('canplay', launchTrailer, { once: true });
-        video.load();
+        v1.addEventListener('canplay', launchTrailer, { once: true });
+        v1.load();
       }
     };
   })();
@@ -476,13 +528,14 @@
     const icon = row.querySelector('.toggle-icon');
     if (icon) icon.style.transform = expanded ? 'rotate(180deg)' : 'rotate(0deg)';
 
-    // Pre-buffer video silently as soon as row opens so playback is instant
+    // Pre-buffer both trailer clips silently when row expands
     if (expanded) {
-      const video = details.querySelector('.trailer-video');
-      if (video && video.readyState < 2) {
-        video.preload = 'auto';
-        video.load();
-      }
+      details.querySelectorAll('.trailer-video').forEach(video => {
+        if (video.readyState < 2) {
+          video.preload = 'auto';
+          video.load();
+        }
+      });
     }
   };
   document.addEventListener('show.bs.collapse', (e) => setRowExpanded(e.target, true));

@@ -2,11 +2,24 @@
 
 require 'digest'
 
-# Generates deterministic fake movies with sequential 4-clip cyclic rotation (1->2->3->4->1).
+# Generates deterministic fake movies with multi-clip combination, color grading, speed, and zoom.
 class MoviesController < ApplicationController
   PER_PAGE = 10
   DEFAULT_LOCALE = 'en-US'
   DEFAULT_SEED = '58933423'
+
+  COLOR_PRESETS = [
+    'contrast(1.18) saturate(1.3) brightness(1.02)',                        # Crisp Cinematic
+    'hue-rotate(35deg) contrast(1.15) saturate(1.2)',                       # Modern Teal/Warm
+    'sepia(0.35) contrast(1.2) saturate(1.25)',                             # Golden Vintage
+    'contrast(1.3) saturate(0.8) brightness(0.95)',                         # Gritty Noir / Thriller
+    'hue-rotate(180deg) contrast(1.1) saturate(1.25)',                      # Sci-Fi Neon
+    'saturate(1.45) contrast(1.15)'                                         # Vibrant Blockbuster
+  ].freeze
+
+  SPEED_PRESETS = [0.9, 0.95, 1.0, 1.1, 1.18].freeze
+  ZOOM_PRESETS  = [1.12, 1.16, 1.20].freeze
+  TRANSITIONS   = %w[crossfade fade-black].freeze
 
   LOCALE_DATA = {
     'en-US' => {
@@ -172,9 +185,16 @@ class MoviesController < ApplicationController
     plot_idx   = struct_rng.rand(dict[:plots].size)
     hook_idx   = struct_rng.rand(dict[:hooks].size)
 
-    # Strictly sequential clip rotation: 1 -> clip1, 2 -> clip2, 3 -> clip3, 4 -> clip4, 5 -> clip1 ...
-    clip_number = ((index - 1) % 4) + 1
-    zoom = [1.05, 1.1, 1.15].sample(random: struct_rng)
+    # 1. Deterministically pick 2 DISTINCT clips out of the 4 available
+    clip_a = ((index - 1) % 4) + 1
+    possible_b = [1, 2, 3, 4] - [clip_a]
+    clip_b = possible_b[struct_rng.rand(possible_b.size)]
+
+    # 2. Pick deterministic color correction, speed, zoom, and transition
+    color_effect = COLOR_PRESETS[struct_rng.rand(COLOR_PRESETS.size)]
+    speed        = SPEED_PRESETS[struct_rng.rand(SPEED_PRESETS.size)]
+    zoom         = ZOOM_PRESETS[struct_rng.rand(ZOOM_PRESETS.size)]
+    transition   = TRANSITIONS[struct_rng.rand(TRANSITIONS.size)]
 
     adjective = if dict[:title_adj].is_a?(Hash)
                   gender = dict[:noun_genders][noun_idx]
@@ -202,10 +222,14 @@ class MoviesController < ApplicationController
       index: index, title: title, genre: dict[:genres][genre_idx], year: year,
       cast: cast, director: director, plot: dict[:plots][plot_idx],
       trailer: {
-        clip: "clip#{clip_number}",
+        clip1: "clip#{clip_a}",
+        clip2: "clip#{clip_b}",
+        color_effect: color_effect,
+        speed: speed,
+        zoom: zoom,
+        transition: transition,
         hook: dict[:hooks][hook_idx],
-        starring_text: dict[:starring_text],
-        zoom: zoom
+        starring_text: dict[:starring_text]
       },
       likes: fractional_count(@likes, rng_for(@seed, 'likes', index)),
       reviews: generate_reviews(dict, index)
