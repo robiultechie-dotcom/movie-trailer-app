@@ -2,6 +2,7 @@
 
 require 'digest'
 
+# Generates deterministic fake movies with sequential 4-clip cyclic rotation (1->2->3->4->1).
 class MoviesController < ApplicationController
   PER_PAGE = 10
   DEFAULT_LOCALE = 'en-US'
@@ -171,11 +172,9 @@ class MoviesController < ApplicationController
     plot_idx   = struct_rng.rand(dict[:plots].size)
     hook_idx   = struct_rng.rand(dict[:hooks].size)
 
-    hue        = struct_rng.rand(0..359)
-    speed      = [0.9, 0.95, 1.0, 1.05, 1.1][struct_rng.rand(5)]
-    zoom       = [1.05, 1.1, 1.15, 1.2][struct_rng.rand(4)]
-    offset1    = [0.0, 0.5, 1.0][struct_rng.rand(3)]
-    offset2    = [0.0, 0.5, 1.0][struct_rng.rand(3)]
+    # Strictly sequential clip rotation: 1 -> clip1, 2 -> clip2, 3 -> clip3, 4 -> clip4, 5 -> clip1 ...
+    clip_number = ((index - 1) % 4) + 1
+    zoom = [1.05, 1.1, 1.15].sample(random: struct_rng)
 
     adjective = if dict[:title_adj].is_a?(Hash)
                   gender = dict[:noun_genders][noun_idx]
@@ -203,9 +202,10 @@ class MoviesController < ApplicationController
       index: index, title: title, genre: dict[:genres][genre_idx], year: year,
       cast: cast, director: director, plot: dict[:plots][plot_idx],
       trailer: {
-        hook: dict[:hooks][hook_idx], starring_text: dict[:starring_text], hue: hue,
-        speed: speed, zoom: zoom, swap: index.even?,
-        offset1: offset1, offset2: offset2
+        clip: "clip#{clip_number}",
+        hook: dict[:hooks][hook_idx],
+        starring_text: dict[:starring_text],
+        zoom: zoom
       },
       likes: fractional_count(@likes, rng_for(@seed, 'likes', index)),
       reviews: generate_reviews(dict, index)
