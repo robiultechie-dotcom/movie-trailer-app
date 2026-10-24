@@ -12,6 +12,7 @@
       safe_join([
         clip.(1), clip.(2),
         content_tag(:audio, nil, class: 'trailer-audio', src: '/music.mp3', preload: 'auto'),
+        content_tag(:div, nil, class: 'trailer-vignette'),
         content_tag(:canvas, nil, class: 'trailer-canvas'),
         content_tag(:div, class: 'position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center trailer-placeholder bg-dark') do
           content_tag(compact ? :h6 : :h5, movie[:title], class: "text-uppercase fw-bold text-light opacity-50 #{compact ? 'px-2' : 'px-3'} text-center mb-0", style: 'word-wrap: break-word;')
@@ -43,7 +44,8 @@
 
     .trailer-wrapper { max-width: 340px; margin: 10px auto; }
     .trailer-container { aspect-ratio: 16 / 9; width: 100%; position: relative; overflow: hidden; border-radius: 8px; background-color: #000; }
-    .trailer-video { object-fit: cover; width: 100%; height: 100%; display: none; position: absolute; top: 0; left: 0; z-index: 2; transition: transform 5s ease-out; }
+    .trailer-video { object-fit: cover; width: 100%; height: 100%; display: none; position: absolute; top: 0; left: 0; z-index: 2; transform: translateZ(0); will-change: transform; }
+    .trailer-vignette { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle, rgba(0,0,0,0) 40%, rgba(0,0,0,0.75) 100%); z-index: 3; pointer-events: none; display: none; }
     .trailer-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; pointer-events: none; z-index: 4; }
     .trailer-placeholder { z-index: 3; }
     .trailer-placeholder.is-hidden { display: none !important; }
@@ -199,54 +201,53 @@
     const TITLE_FONT = '"Segoe UI", Impact, Arial, sans-serif';
     const fade = (t, total, ms) => (t < ms ? t / ms : t > total - ms ? (total - t) / ms : 1);
 
-    const wrapText = (ctx, text, x, y, maxWidth, lineHeight) => {
-      if (!text) return;
+    const preWrap = (text, maxWordsPerLine = 3) => {
+      if (!text) return [];
+      const words = text.split(' ');
       const lines = [];
-      let line = '';
-      text.split(' ').forEach((word, i) => {
-        const candidate = `${line}${word} `;
-        if (ctx.measureText(candidate).width > maxWidth && i > 0) { lines.push(line.trim()); line = `${word} `; }
-        else line = candidate;
-      });
-      lines.push(line.trim());
-      const startY = y - ((lines.length - 1) * lineHeight) / 2;
-      lines.forEach((content, i) => ctx.fillText(content, x, startY + i * lineHeight));
-    };
-
-    const drawOverlay = (ctx, canvas, cfg, p) => {
-      const { width: w, height: h } = canvas;
-      const zoomed = (text, scale, alpha, font, maxWidth, lineHeight) => {
-        ctx.save();
-        ctx.translate(w / 2, h / 2);
-        ctx.scale(scale, scale);
-        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-        ctx.font = font;
-        wrapText(ctx, text, 0, 0, maxWidth, lineHeight);
-        ctx.restore();
-      };
-
-      if (p < 3200) {
-        zoomed(cfg.hook, 1 + p / 15000, fade(p, 3200, 400), `bold 18px ${FONT}`, w - 40, 24);
-      } else if (p >= 3500 && p < 6500) {
-        const t = p - 3500, alpha = fade(t, 3000, 400), x = w / 2 + (t < 800 ? 40 - (t / 800) * 40 : 0);
-        ctx.fillStyle = `rgba(220, 230, 255, ${alpha})`;
-        ctx.font = `13px ${FONT}`;
-        ctx.fillText(cfg.starringLabel, x, h / 2 - 16);
-        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-        ctx.font = `bold 18px ${FONT}`;
-        wrapText(ctx, cfg.actor, x, h / 2 + 14, w - 40, 22);
-      } else if (p >= 6800) {
-        const t = p - 6800;
-        zoomed(cfg.title, 1 + t / 25000, fade(t, 3200, 500), `bold 21px ${TITLE_FONT}`, w - 30, 26);
+      for (let i = 0; i < words.length; i += maxWordsPerLine) {
+        lines.push(words.slice(i, i + maxWordsPerLine).join(' '));
       }
+      return lines;
     };
 
-    const resetClip = (clip) => { clip.pause(); clip.style.display = 'none'; clip.style.transform = 'scale(1)'; };
-    const startClip = (clip, offset, zoom) => {
-      clip.currentTime = offset;
-      clip.style.display = 'block';
-      requestAnimationFrame(() => { clip.style.transform = `scale(${zoom})`; });
-      clip.play().catch((e) => console.warn(e));
+    const drawLines = (ctx, lines, x, y, lineHeight) => {
+      const startY = y - ((lines.length - 1) * lineHeight) / 2;
+      lines.forEach((line, i) => ctx.fillText(line, x, startY + i * lineHeight));
+    };
+
+    const resetClip = (clip) => {
+      clip.pause();
+      clip.style.display = 'none';
+      clip.style.transition = 'none';
+      clip.style.transform = 'scale(1)';
+    };
+
+    // Safely seeks and starts clip only when buffer is ready
+    const prepareAndPlay = (clip, offset, zoom) => {
+      return new Promise((resolve) => {
+        const onSeeked = () => {
+          clip.removeEventListener('seeked', onSeeked);
+          clip.style.display = 'block';
+          clip.play().then(() => {
+            clip.style.transition = 'transform 5s ease-out';
+            clip.style.transform = `scale(${zoom})`;
+            resolve();
+          }).catch(() => resolve());
+        };
+
+        if (Math.abs(clip.currentTime - offset) < 0.1) {
+          clip.style.display = 'block';
+          clip.play().then(() => {
+            clip.style.transition = 'transform 5s ease-out';
+            clip.style.transform = `scale(${zoom})`;
+            resolve();
+          }).catch(() => resolve());
+        } else {
+          clip.addEventListener('seeked', onSeeked, { once: true });
+          clip.currentTime = offset;
+        }
+      });
     };
 
     window.playTwoClipTrailer = (button) => {
@@ -255,16 +256,26 @@
       const container = button.closest('.trailer-container');
       const d = container.dataset;
       const cfg = {
-        title: (d.title || '').toUpperCase(), hook: (d.hook || '').toUpperCase(), actor: (d.actor || '').toUpperCase(),
+        title: (d.title || '').toUpperCase(),
+        hook: (d.hook || '').toUpperCase(),
+        actor: (d.actor || '').toUpperCase(),
         starringLabel: (d.starring || 'STARRING').toUpperCase(),
-        hue: parseInt(d.hue, 10) || 0, speed: parseFloat(d.speed) || 1.0, zoom: parseFloat(d.zoom) || 1.1
+        hue: parseInt(d.hue, 10) || 0,
+        speed: parseFloat(d.speed) || 1.0,
+        zoom: parseFloat(d.zoom) || 1.1
       };
+
+      const cachedHookLines = preWrap(cfg.hook, 3);
+      const cachedTitleLines = preWrap(cfg.title, 2);
+      const cachedActorLines = preWrap(cfg.actor, 2);
+
       const offsets = [parseFloat(d.offset1) || 0, parseFloat(d.offset2) || 0];
       const clips = [container.querySelector('.video-clip-1'), container.querySelector('.video-clip-2')];
       if (d.swap === 'true') { clips.reverse(); offsets.reverse(); }
       const [first, second] = clips;
 
       const audio = container.querySelector('.trailer-audio');
+      const vignette = container.querySelector('.trailer-vignette');
       const canvas = container.querySelector('.trailer-canvas');
       const placeholder = container.querySelector('.trailer-placeholder');
       const ctx = canvas.getContext('2d');
@@ -275,62 +286,99 @@
         clip.style.filter = `hue-rotate(${cfg.hue}deg) contrast(1.15) saturate(1.25)`;
         clip.playbackRate = cfg.speed;
         clip.loop = true;
-        clip.style.transform = 'scale(1)';
       });
-      button.style.display = 'none';
-      placeholder.classList.add('is-hidden');
-      canvas.style.display = 'block';
+
+      // Temporary visual feedback while seeking
+      button.style.pointerEvents = 'none';
+      button.style.opacity = '0.5';
 
       resetClip(second);
-      startClip(first, offsets[0], cfg.zoom);
-      if (audio) {
-        audio.currentTime = 0;
-        audio.volume = 1.0;
-        audio.play().catch((e) => console.warn('Audio autoplay blocked:', e));
-      }
 
-      let startTime = null, switched = false, frameId = null;
+      // Preload next clip in background to prevent switch freeze
+      second.currentTime = offsets[1];
 
-      const stop = () => {
-        cancelAnimationFrame(frameId);
-        clips.forEach(resetClip);
-        audio?.pause();
-        canvas.style.display = 'none';
-        placeholder.classList.remove('is-hidden');
-        button.style.display = 'block';
-        window.currentActiveTrailer = null;
-      };
-      window.currentActiveTrailer = { stop };
+      prepareAndPlay(first, offsets[0], cfg.zoom).then(() => {
+        button.style.display = 'none';
+        button.style.pointerEvents = 'auto';
+        button.style.opacity = '1';
+        placeholder.classList.add('is-hidden');
+        if (vignette) vignette.style.display = 'block';
+        canvas.style.display = 'block';
 
-      const render = (timestamp) => {
-        startTime ??= timestamp;
-        const p = timestamp - startTime;
-
-        if (p >= 5000 && !switched) {
-          resetClip(first);
-          startClip(second, offsets[1], cfg.zoom);
-          switched = true;
+        if (audio) {
+          audio.currentTime = 0;
+          audio.volume = 1.0;
+          audio.play().catch((e) => console.warn('Audio play error:', e));
         }
-        if (p >= 10000) return stop();
 
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const vignette = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, canvas.height / 3, canvas.width / 2, canvas.height / 2, canvas.width / 1.15);
-        vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
-        vignette.addColorStop(1, 'rgba(0, 0, 0, 0.72)');
-        ctx.fillStyle = vignette;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        let startTime = null, switched = false, frameId = null;
 
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
-        ctx.shadowBlur = 8;
-        ctx.shadowOffsetX = 2;
-        ctx.shadowOffsetY = 2;
-        drawOverlay(ctx, canvas, cfg, p);
+        const stop = () => {
+          cancelAnimationFrame(frameId);
+          clips.forEach(resetClip);
+          audio?.pause();
+          canvas.style.display = 'none';
+          if (vignette) vignette.style.display = 'none';
+          placeholder.classList.remove('is-hidden');
+          button.style.display = 'block';
+          window.currentActiveTrailer = null;
+        };
+        window.currentActiveTrailer = { stop };
 
+        const render = (timestamp) => {
+          startTime ??= timestamp;
+          const p = timestamp - startTime;
+
+          if (p >= 5000 && !switched) {
+            resetClip(first);
+            prepareAndPlay(second, offsets[1], cfg.zoom);
+            switched = true;
+          }
+          if (p >= 10000) return stop();
+
+          const { width: w, height: h } = canvas;
+          ctx.clearRect(0, 0, w, h);
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+
+          if (p < 3200) {
+            const alpha = fade(p, 3200, 400);
+            ctx.save();
+            ctx.translate(w / 2, h / 2);
+            const sc = 1 + p / 16000;
+            ctx.scale(sc, sc);
+            ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+            ctx.font = `bold 19px ${FONT}`;
+            drawLines(ctx, cachedHookLines, 0, 0, 24);
+            ctx.restore();
+          } else if (p >= 3500 && p < 6500) {
+            const t = p - 3500;
+            const alpha = fade(t, 3000, 400);
+            const x = w / 2 + (t < 800 ? 30 - (t / 800) * 30 : 0);
+            ctx.fillStyle = `rgba(220, 230, 255, ${alpha})`;
+            ctx.font = `12px ${FONT}`;
+            ctx.fillText(cfg.starringLabel, x, h / 2 - 16);
+
+            ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+            ctx.font = `bold 18px ${FONT}`;
+            drawLines(ctx, cachedActorLines, x, h / 2 + 14, 22);
+          } else if (p >= 6800) {
+            const t = p - 6800;
+            const alpha = fade(t, 3200, 500);
+            ctx.save();
+            ctx.translate(w / 2, h / 2);
+            const sc = 1 + t / 24000;
+            ctx.scale(sc, sc);
+            ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+            ctx.font = `bold 22px ${TITLE_FONT}`;
+            drawLines(ctx, cachedTitleLines, 0, 0, 26);
+            ctx.restore();
+          }
+
+          frameId = requestAnimationFrame(render);
+        };
         frameId = requestAnimationFrame(render);
-      };
-      frameId = requestAnimationFrame(render);
+      });
     };
   })();
 
@@ -354,7 +402,6 @@
       $('likesBadge').textContent = formatBadge(likes.value);
       if (append) setSpinner(true);
 
-      // Preserve currently open accordion rows before HTML is replaced
       const openCollapseIds = Array.from(document.querySelectorAll('.details-collapse.show, [id^="gallery-details-"].show')).map(el => el.id);
 
       const query = new URLSearchParams({ locale: language.value, seed: seed.value, likes: likes.value, reviews: reviews.value, page: state.page, view_mode: state.view });
@@ -368,7 +415,6 @@
           } else {
             $('movieDataContainer').innerHTML = doc.getElementById('movieDataContainer').innerHTML;
 
-            // Restore all previously opened accordion rows and their UI styles
             openCollapseIds.forEach((id) => {
               const el = document.getElementById(id);
               if (el) {
